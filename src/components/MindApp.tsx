@@ -169,7 +169,8 @@ function AddCard({ onAdd }: { onAdd: (card: NewCardPayload) => void | Promise<vo
 	const voiceBlobRef = useRef<Blob | null>(null);
 
 	const runTranscription = useCallback(async (blob: Blob) => {
-		const gen = (transcribeGenRef.current += 1);
+		transcribeGenRef.current += 1;
+		const gen = transcribeGenRef.current;
 		setRecState('transcribing');
 		setTranscribeError(null);
 		try {
@@ -183,8 +184,8 @@ function AddCard({ onAdd }: { onAdd: (card: NewCardPayload) => void | Promise<vo
 				'Could not transcribe in the browser. Edit the text below or save audio only.',
 			);
 			setVoiceTranscript('');
-		} finally {
-			if (transcribeGenRef.current !== gen) return;
+		}
+		if (transcribeGenRef.current === gen) {
 			setRecState('done');
 		}
 	}, []);
@@ -436,10 +437,14 @@ function AddCard({ onAdd }: { onAdd: (card: NewCardPayload) => void | Promise<vo
 							<audio src={audioUrl} controls className="w-full">
 								<track kind="captions" />
 							</audio>
-							<label className="text-[10px] font-black uppercase tracking-[0.08em] text-[#bbb]">
+							<label
+								htmlFor="voice-transcript-draft"
+								className="text-[10px] font-black uppercase tracking-[0.08em] text-[#bbb]"
+							>
 								Transcript
 							</label>
 							<textarea
+								id="voice-transcript-draft"
 								value={voiceTranscript}
 								onChange={(e) => setVoiceTranscript(e.target.value)}
 								placeholder="Transcript appears here; you can edit or paste from another tool."
