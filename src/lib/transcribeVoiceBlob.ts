@@ -11,6 +11,9 @@ async function getTranscriber(): Promise<AutomaticSpeechRecognitionPipelineType>
 			const { pipeline, env } = await import('@xenova/transformers');
 			env.allowLocalModels = false;
 			env.useBrowserCache = true;
+			if (typeof SharedArrayBuffer === 'undefined' && env.backends.onnx?.wasm) {
+				env.backends.onnx.wasm.numThreads = 1;
+			}
 			return pipeline(
 				'automatic-speech-recognition',
 				'Xenova/whisper-tiny.en',
@@ -22,8 +25,13 @@ async function getTranscriber(): Promise<AutomaticSpeechRecognitionPipelineType>
 
 /**
  * Linear resample mono PCM to 16 kHz (Whisper feature extractor rate).
+ * @param input Mono samples at `inputRate` Hz
+ * @param inputRate Source sample rate in Hz
  */
-function resampleTo16kHzMono(input: Float32Array, inputRate: number): Float32Array {
+export function resampleTo16kHzMono(
+	input: Float32Array,
+	inputRate: number,
+): Float32Array {
 	if (inputRate === WHISPER_SAMPLE_RATE) {
 		return input;
 	}
@@ -64,10 +72,10 @@ export async function decodeRecordingToWhisperPcm(blob: Blob): Promise<Float32Ar
 }
 
 /**
- * Transcribe a voice memo blob fully in the browser using Transformers.js (no STT API key).
+ * Transcribe mono 16 kHz PCM using the in-browser Whisper pipeline.
+ * @param pcm Mono float samples at 16 kHz
  */
-export async function transcribeVoiceBlob(blob: Blob): Promise<string> {
-	const pcm = await decodeRecordingToWhisperPcm(blob);
+export async function transcribePcm16kHzMono(pcm: Float32Array): Promise<string> {
 	const transcriber = await getTranscriber();
 	const raw = await transcriber(pcm, {
 		chunk_length_s: 30,
@@ -76,4 +84,12 @@ export async function transcribeVoiceBlob(blob: Blob): Promise<string> {
 	const items = Array.isArray(raw) ? raw : [raw];
 	const parts = items.map((item) => item.text.trim()).filter(Boolean);
 	return parts.join(' ').trim();
+}
+
+/**
+ * Transcribe a voice memo blob fully in the browser using Transformers.js (no STT API key).
+ */
+export async function transcribeVoiceBlob(blob: Blob): Promise<string> {
+	const pcm = await decodeRecordingToWhisperPcm(blob);
+	return transcribePcm16kHzMono(pcm);
 }

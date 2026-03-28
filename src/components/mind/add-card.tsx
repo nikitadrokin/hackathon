@@ -5,9 +5,42 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { resampleTo16kHzMono } from "#/lib/transcribeVoiceBlob";
 import { ADD_CARD_CLASS, CARD_CLASS, TYPE_BUTTON_CLASS } from "./class-names";
 import { formatTime } from "./format-time";
 import type { AddMode, NewCardPayload } from "./types";
+
+/** Preferred MediaRecorder output types (first supported wins). */
+const RECORDER_MIME_CANDIDATES = [
+	"audio/webm;codecs=opus",
+	"audio/webm",
+	"audio/mp4",
+	"audio/ogg;codecs=opus",
+] as const;
+
+function pickRecorderMimeType(): string | undefined {
+	for (const t of RECORDER_MIME_CANDIDATES) {
+		if (typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported(t)) {
+			return t;
+		}
+	}
+	return undefined;
+}
+
+type PcmTapNodes = {
+	audioContext: AudioContext;
+	source: MediaStreamAudioSourceNode;
+	processor: ScriptProcessorNode;
+	gain: GainNode;
+};
+
+function disconnectPcmTap(nodes: PcmTapNodes | null): void {
+	if (!nodes) return;
+	nodes.processor.disconnect();
+	nodes.source.disconnect();
+	nodes.gain.disconnect();
+	void nodes.audioContext.close();
+}
 
 export function AddCard({
 	onAdd,
@@ -34,40 +67,96 @@ export function AddCard({
 	const timer = useRef<ReturnType<typeof setInterval> | null>(null);
 	const transcribeGenRef = useRef(0);
 	const voiceBlobRef = useRef<Blob | null>(null);
+	const pcmChunksRef = useRef<Float32Array[]>([]);
+	const pcmTapRef = useRef<PcmTapNodes | null>(null);
 
-	const runTranscription = useCallback(async (blob: Blob) => {
-		transcribeGenRef.current += 1;
-		const gen = transcribeGenRef.current;
-		setRecState("transcribing");
-		setTranscribeError(null);
-		try {
-			const { transcribeVoiceBlob } = await import("#/lib/transcribeVoiceBlob");
-			const text = await transcribeVoiceBlob(blob);
-			if (transcribeGenRef.current !== gen) return;
-			setVoiceTranscript(text);
-		} catch {
-			if (transcribeGenRef.current !== gen) return;
-			setTranscribeError(
-				"Could not transcribe in the browser. Edit the text below or save audio only.",
-			);
-			setVoiceTranscript("");
-		}
-		if (transcribeGenRef.current === gen) {
-			setRecState("done");
-		}
-	}, []);
+	const runTranscription = useCallback(
+		async (blob: Blob, pcm16kMono?: Float32Array) => {
+			transcribeGenRef.current += 1;
+			const gen = transcribeGenRef.current;
+			setRecState("transcribing");
+			setTranscribeError(null);
+			try {
+				const { transcribePcm16kHzMono, transcribeVoiceBlob } = await import(
+					"#/lib/transcribeVoiceBlob"
+				);
+				const usePcm = pcm16kMono !== undefined && pcm16kMono.length > 0;
+				const text = usePcm
+					? await transcribePcm16kHzMono(pcm16kMono)
+					: await transcribeVoiceBlob(blob);
+				if (transcribeGenRef.current !== gen) return;
+				setVoiceTranscript(text);
+			} catch {
+				if (transcribeGenRef.current !== gen) return;
+				setTranscribeError(
+					"Could not transcribe in the browser. Edit the text below or save audio only.",
+				);
+				setVoiceTranscript("");
+			}
+			if (transcribeGenRef.current === gen) {
+				setRecState("done");
+			}
+		},
+		[],
+	);
 
 	const startRecording = useCallback(async () => {
+		let stream: MediaStream | null = null;
 		try {
-			const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-			const mr = new MediaRecorder(stream);
+			stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+			const mediaStream = stream;
+			const chosenMime = pickRecorderMimeType();
+			const mr = chosenMime
+				? new MediaRecorder(mediaStream, { mimeType: chosenMime })
+				: new MediaRecorder(mediaStream);
 			mediaRecorder.current = mr;
 			chunks.current = [];
+			pcmChunksRef.current = [];
 
-			mr.ondataavailable = (e) => chunks.current.push(e.data);
+			const audioCtx = new AudioContext();
+			const source = audioCtx.createMediaStreamSource(mediaStream);
+			const processor = audioCtx.createScriptProcessor(4096, 1, 1);
+			processor.onaudioprocess = (e) => {
+				const ch0 = e.inputBuffer.getChannelData(0);
+				pcmChunksRef.current.push(new Float32Array(ch0));
+			};
+			const gain = audioCtx.createGain();
+			gain.gain.value = 0;
+			source.connect(processor);
+			processor.connect(gain);
+			gain.connect(audioCtx.destination);
+			pcmTapRef.current = { audioContext: audioCtx, source, processor, gain };
+
+			mr.ondataavailable = (e) => {
+				if (e.data.size > 0) chunks.current.push(e.data);
+			};
 			mr.onstop = () => {
-				for (const t of stream.getTracks()) t.stop();
-				const blob = new Blob(chunks.current, { type: "audio/webm" });
+				for (const t of mediaStream.getTracks()) t.stop();
+
+				const recordedType = mr.mimeType || chosenMime || "";
+				const blob = new Blob(chunks.current, {
+					type: recordedType || undefined,
+				});
+
+				const sampleRate = pcmTapRef.current?.audioContext.sampleRate ?? 48_000;
+				const pcmParts = pcmChunksRef.current;
+				pcmChunksRef.current = [];
+
+				disconnectPcmTap(pcmTapRef.current);
+				pcmTapRef.current = null;
+
+				let pcm16kMono: Float32Array | undefined;
+				const totalSamples = pcmParts.reduce((s, c) => s + c.length, 0);
+				if (totalSamples > 0) {
+					const merged = new Float32Array(totalSamples);
+					let offset = 0;
+					for (const c of pcmParts) {
+						merged.set(c, offset);
+						offset += c.length;
+					}
+					pcm16kMono = resampleTo16kHzMono(merged, sampleRate);
+				}
+
 				voiceBlobRef.current = blob;
 				setAudioUrl((prev) => {
 					if (prev) URL.revokeObjectURL(prev);
@@ -78,7 +167,7 @@ export function AddCard({
 					if (ev.target?.result) setAudioData(ev.target.result as string);
 				};
 				reader.readAsDataURL(blob);
-				void runTranscription(blob);
+				void runTranscription(blob, pcm16kMono);
 			};
 
 			mr.start();
@@ -86,6 +175,12 @@ export function AddCard({
 			setRecSeconds(0);
 			timer.current = setInterval(() => setRecSeconds((s) => s + 1), 1000);
 		} catch {
+			disconnectPcmTap(pcmTapRef.current);
+			pcmTapRef.current = null;
+			pcmChunksRef.current = [];
+			if (stream) {
+				for (const t of stream.getTracks()) t.stop();
+			}
 			alert("Microphone access denied.");
 			setMode(null);
 		}
