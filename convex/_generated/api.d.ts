@@ -9,6 +9,8 @@
  */
 
 import type * as http from "../http.js";
+import type * as lib_requireUser from "../lib/requireUser.js";
+import type * as mindCards from "../mindCards.js";
 import type * as myFunctions from "../myFunctions.js";
 
 import type {
@@ -19,6 +21,8 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   http: typeof http;
+  "lib/requireUser": typeof lib_requireUser;
+  mindCards: typeof mindCards;
   myFunctions: typeof myFunctions;
 }>;
 

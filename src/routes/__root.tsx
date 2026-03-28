@@ -4,6 +4,7 @@ import {
 	createRootRouteWithContext,
 	HeadContent,
 	Scripts,
+	useRouterState,
 } from "@tanstack/react-router";
 import { TanStackRouterDevtoolsPanel } from "@tanstack/react-router-devtools";
 import type { TRPCOptionsProxy } from "@trpc/tanstack-react-query";
@@ -20,14 +21,19 @@ interface MyRouterContext {
 	queryClient: QueryClient;
 
 	trpc: TRPCOptionsProxy<TRPCRouter>;
+	token?: string | null;
+	isAuthenticated?: boolean;
 }
 
 const THEME_INIT_SCRIPT = `(function(){try{var stored=window.localStorage.getItem('theme');var mode=(stored==='light'||stored==='dark'||stored==='auto')?stored:'auto';var prefersDark=window.matchMedia('(prefers-color-scheme: dark)').matches;var resolved=mode==='auto'?(prefersDark?'dark':'light'):mode;var root=document.documentElement;root.classList.remove('light','dark');root.classList.add(resolved);if(mode==='auto'){root.removeAttribute('data-theme')}else{root.setAttribute('data-theme',mode)}root.style.colorScheme=resolved;}catch(e){}})();`;
 
 export const Route = createRootRouteWithContext<MyRouterContext>()({
-	loader: async () => {
+	beforeLoad: async () => {
 		const token = await getToken();
-		return { token };
+		return {
+			token,
+			isAuthenticated: Boolean(token),
+		};
 	},
 	head: () => ({
 		meta: [
@@ -39,7 +45,7 @@ export const Route = createRootRouteWithContext<MyRouterContext>()({
 				content: "width=device-width, initial-scale=1",
 			},
 			{
-				title: "TanStack Start Starter",
+				title: "mymind",
 			},
 		],
 		links: [
@@ -52,8 +58,20 @@ export const Route = createRootRouteWithContext<MyRouterContext>()({
 	shellComponent: RootDocument,
 });
 
+function AppChrome({ children }: { children: React.ReactNode }) {
+	const pathname = useRouterState({ select: (s) => s.location.pathname });
+	const hideSiteChrome = pathname === "/";
+	return (
+		<>
+			{hideSiteChrome ? null : <Header />}
+			{children}
+			{hideSiteChrome ? null : <Footer />}
+		</>
+	);
+}
+
 function RootDocument({ children }: { children: React.ReactNode }) {
-	const { token } = Route.useLoaderData();
+	const { token } = Route.useRouteContext();
 
 	return (
 		<html lang="en" suppressHydrationWarning>
@@ -64,11 +82,9 @@ function RootDocument({ children }: { children: React.ReactNode }) {
 			</head>
 			<body className="font-sans antialiased [overflow-wrap:anywhere] selection:bg-[rgba(79,184,178,0.24)]">
 				<TanStackQueryProvider>
-					<Header />
 					<ConvexClientProvider initialToken={token}>
-						{children}
+						<AppChrome>{children}</AppChrome>
 					</ConvexClientProvider>
-					<Footer />
 					<TanStackDevtools
 						config={{
 							position: "bottom-right",
