@@ -193,6 +193,10 @@ function PeopleComponent() {
 
 Loaders simplify your data fetching logic dramatically. Check out more information in the [Loader documentation](https://tanstack.com/router/latest/docs/framework/react/guide/data-loading#loader-parameters).
 
+## Project documentation
+
+- [Audio transcription (no STT API key) and OpenRouter](./docs/audio-transcription-and-openrouter.md) — free transcribers, `content: [{ type: "text", ... }]`, and how this app’s Convex classifier uses `openrouter/free` with card text.
+
 # Demo files
 
 Files prefixed with `demo` can be safely deleted. They are there to provide a starting point for you to play around with the features you've installed.

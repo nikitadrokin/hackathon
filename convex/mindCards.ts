@@ -165,7 +165,7 @@ Confidence is from 0.0 to 1.0. Output only JSON.`;
   if (card.type === "voice" && card.audioDurationSeconds) {
     userParts.push({
       type: "text",
-      text: `Audio duration: ${card.audioDurationSeconds} seconds (transcript will be added automatically before this run).`,
+      text: `Voice memo duration: ${card.audioDurationSeconds} seconds. The transcript is in the Text section above when present.`,
     });
   }
 

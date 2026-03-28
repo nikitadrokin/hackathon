@@ -150,17 +150,44 @@ function AddCard({ onAdd }: { onAdd: (card: NewCardPayload) => void | Promise<vo
 	const [mode, setMode] = useState<AddMode>(null);
 	const [text, setText] = useState('');
 	const [dragging, setDragging] = useState(false);
-	const [recState, setRecState] = useState<'idle' | 'recording' | 'done'>('idle');
+	const [recState, setRecState] = useState<'idle' | 'recording' | 'transcribing' | 'done'>(
+		'idle',
+	);
 	const [recSeconds, setRecSeconds] = useState(0);
 	const [audioUrl, setAudioUrl] = useState<string | null>(null);
 	const [audioData, setAudioData] = useState<string | null>(null);
 	const [audioDuration, setAudioDuration] = useState(0);
+	const [voiceTranscript, setVoiceTranscript] = useState('');
+	const [transcribeError, setTranscribeError] = useState<string | null>(null);
 
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
 	const fileInputRef = useRef<HTMLInputElement>(null);
 	const mediaRecorder = useRef<MediaRecorder | null>(null);
 	const chunks = useRef<Blob[]>([]);
 	const timer = useRef<ReturnType<typeof setInterval> | null>(null);
+	const transcribeGenRef = useRef(0);
+	const voiceBlobRef = useRef<Blob | null>(null);
+
+	const runTranscription = useCallback(async (blob: Blob) => {
+		const gen = (transcribeGenRef.current += 1);
+		setRecState('transcribing');
+		setTranscribeError(null);
+		try {
+			const { transcribeVoiceBlob } = await import('#/lib/transcribeVoiceBlob');
+			const text = await transcribeVoiceBlob(blob);
+			if (transcribeGenRef.current !== gen) return;
+			setVoiceTranscript(text);
+		} catch {
+			if (transcribeGenRef.current !== gen) return;
+			setTranscribeError(
+				'Could not transcribe in the browser. Edit the text below or save audio only.',
+			);
+			setVoiceTranscript('');
+		} finally {
+			if (transcribeGenRef.current !== gen) return;
+			setRecState('done');
+		}
+	}, []);
 
 	const startRecording = useCallback(async () => {
 		try {
@@ -173,13 +200,17 @@ function AddCard({ onAdd }: { onAdd: (card: NewCardPayload) => void | Promise<vo
 			mr.onstop = () => {
 				for (const t of stream.getTracks()) t.stop();
 				const blob = new Blob(chunks.current, { type: 'audio/webm' });
-				setAudioUrl(URL.createObjectURL(blob));
+				voiceBlobRef.current = blob;
+				setAudioUrl((prev) => {
+					if (prev) URL.revokeObjectURL(prev);
+					return URL.createObjectURL(blob);
+				});
 				const reader = new FileReader();
 				reader.onload = (ev) => {
 					if (ev.target?.result) setAudioData(ev.target.result as string);
 				};
 				reader.readAsDataURL(blob);
-				setRecState('done');
+				void runTranscription(blob);
 			};
 
 			mr.start();
@@ -190,7 +221,7 @@ function AddCard({ onAdd }: { onAdd: (card: NewCardPayload) => void | Promise<vo
 			alert('Microphone access denied.');
 			setMode(null);
 		}
-	}, []);
+	}, [runTranscription]);
 
 	useEffect(() => {
 		if (mode === 'text') {
@@ -205,6 +236,7 @@ function AddCard({ onAdd }: { onAdd: (card: NewCardPayload) => void | Promise<vo
 	}, [mode, recState, startRecording]);
 
 	function switchMode(m: AddMode) {
+		transcribeGenRef.current += 1;
 		if (mode === 'voice' && recState === 'recording') {
 			if (timer.current) clearInterval(timer.current);
 			mediaRecorder.current?.stop();
@@ -212,8 +244,14 @@ function AddCard({ onAdd }: { onAdd: (card: NewCardPayload) => void | Promise<vo
 		setMode((prev) => (prev === m ? null : m));
 		setText('');
 		setRecState('idle');
-		setAudioUrl(null);
+		setAudioUrl((prev) => {
+			if (prev) URL.revokeObjectURL(prev);
+			return null;
+		});
 		setAudioData(null);
+		setVoiceTranscript('');
+		setTranscribeError(null);
+		voiceBlobRef.current = null;
 	}
 
 	async function submitText() {
@@ -248,11 +286,31 @@ function AddCard({ onAdd }: { onAdd: (card: NewCardPayload) => void | Promise<vo
 	}
 
 	async function saveVoice() {
-		if (audioData) {
-			await onAdd({ type: 'voice', audioData, audioDuration });
-			setMode(null);
-			setRecState('idle');
-		}
+		if (!audioData) return;
+		const trimmed = voiceTranscript.trim();
+		await onAdd({
+			type: 'voice',
+			audioData,
+			audioDuration,
+			...(trimmed ? { text: trimmed } : {}),
+		});
+		transcribeGenRef.current += 1;
+		setAudioUrl((prev) => {
+			if (prev) URL.revokeObjectURL(prev);
+			return null;
+		});
+		setAudioData(null);
+		setVoiceTranscript('');
+		setTranscribeError(null);
+		voiceBlobRef.current = null;
+		setMode(null);
+		setRecState('idle');
+	}
+
+	function retryTranscription() {
+		const blob = voiceBlobRef.current;
+		if (!blob) return;
+		void runTranscription(blob);
 	}
 
 	return (
@@ -368,21 +426,57 @@ function AddCard({ onAdd }: { onAdd: (card: NewCardPayload) => void | Promise<vo
 							</button>
 						</>
 					)}
+					{recState === 'transcribing' && (
+						<p className="m-0 text-[13px] leading-[1.5] text-[#888]">
+							Transcribing locally… First run downloads a small speech model to your browser.
+						</p>
+					)}
 					{recState === 'done' && audioUrl && (
 						<>
 							<audio src={audioUrl} controls className="w-full">
 								<track kind="captions" />
 							</audio>
-							<div className="mt-2.5 flex items-center justify-between">
-								<button
-									type="button"
-									onClick={() => {
-										setRecState('idle');
-									}}
-									className="cursor-pointer border-none bg-transparent p-0 text-[12px] text-[#aaa] hover:text-[#555]"
-								>
-									Re-record
-								</button>
+							<label className="text-[10px] font-black uppercase tracking-[0.08em] text-[#bbb]">
+								Transcript
+							</label>
+							<textarea
+								value={voiceTranscript}
+								onChange={(e) => setVoiceTranscript(e.target.value)}
+								placeholder="Transcript appears here; you can edit or paste from another tool."
+								rows={4}
+								className="font-[var(--font-body)] w-full resize-y rounded-[10px] border border-[#ebebeb] bg-[#fafafa] p-2.5 text-[13px] leading-[1.6] text-[#1a1a1a] outline-none focus:border-[#ccc]"
+							/>
+							{transcribeError ? (
+								<p className="m-0 text-[12px] leading-[1.4] text-[#b45309]">{transcribeError}</p>
+							) : null}
+							<div className="mt-2.5 flex flex-wrap items-center justify-between gap-2">
+								<div className="flex flex-wrap gap-2">
+									<button
+										type="button"
+										onClick={() => {
+											transcribeGenRef.current += 1;
+											setAudioUrl((prev) => {
+												if (prev) URL.revokeObjectURL(prev);
+												return null;
+											});
+											setAudioData(null);
+											setVoiceTranscript('');
+											setTranscribeError(null);
+											voiceBlobRef.current = null;
+											setRecState('idle');
+										}}
+										className="cursor-pointer border-none bg-transparent p-0 text-[12px] text-[#aaa] hover:text-[#555]"
+									>
+										Re-record
+									</button>
+									<button
+										type="button"
+										onClick={retryTranscription}
+										className="cursor-pointer border-none bg-transparent p-0 text-[12px] text-[#888] hover:text-[#333]"
+									>
+										Transcribe again
+									</button>
+								</div>
 								<button
 									type="button"
 									onClick={() => void saveVoice()}
@@ -648,6 +742,11 @@ function VoiceCard({
 					{duration > 0 ? formatTime(duration) : formatTime(currentTime)}
 				</span>
 			</div>
+			{card.text?.trim() ? (
+				<p className="mt-3 mb-0 whitespace-pre-wrap break-words text-[13px] leading-[1.65] text-[#444]">
+					{card.text}
+				</p>
+			) : null}
 			<AiMeta card={card} />
 		</div>
 	);
