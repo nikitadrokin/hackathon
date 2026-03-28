@@ -36,7 +36,7 @@ type CardContentForClassify = {
   audioDurationSeconds?: number;
 };
 
-/** OpenAI chat message user content parts we send for classification. */
+/** Chat message user content parts we send for classification. */
 type OpenAIUserContentPart =
   | { type: "text"; text: string }
   | { type: "image_url"; image_url: { url: string } };
@@ -172,40 +172,7 @@ Confidence is from 0.0 to 1.0. Output only JSON.`;
   };
 }
 
-async function transcribeAudioWithWhisper(
-  apiKey: string,
-  audioData: string,
-): Promise<string | null> {
-  const bytes = decodeBase64(audioData);
-  if (!bytes) return null;
-  const parsed = parseDataUrl(audioData);
-  const mime = parsed?.mimeType ?? "audio/webm";
-  const buffer = new ArrayBuffer(bytes.byteLength);
-  new Uint8Array(buffer).set(bytes);
-  const blob = new Blob([buffer], { type: mime });
-  const form = new FormData();
-  form.append("model", "whisper-1");
-  form.append("file", blob, "audio.webm");
-  form.append("response_format", "text");
-
-  const response = await fetch("https://api.openai.com/v1/audio/transcriptions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: form,
-  });
-
-  if (!response.ok) {
-    const err = await response.text();
-    throw new Error(`Whisper transcription failed: ${err}`);
-  }
-
-  const transcript = await response.text();
-  return normalizeText(transcript) ?? null;
-}
-
-async function classifyWithOpenAI(
+async function classifyWithOpenRouter(
   input: CardContentForClassify,
   options: { apiKey: string; model?: string },
 ): Promise<{
@@ -220,23 +187,8 @@ async function classifyWithOpenAI(
   const { systemPrompt, userContent } = toPrompt(input);
   const userParts = [...userContent];
 
-  if (input.type === "voice" && input.audioData) {
-    const transcript = await transcribeAudioWithWhisper(options.apiKey, input.audioData);
-    if (transcript) {
-      userParts.push({
-        type: "text",
-        text: `Transcription:\n${transcript}`,
-      });
-    } else {
-      userParts.push({
-        type: "text",
-        text: "No transcript available.",
-      });
-    }
-  }
-
   const payload = {
-    model: options.model ?? "gpt-4o",
+    model: options.model ?? "openrouter/auto",
     response_format: {
       type: "json_object" as const,
     },
@@ -253,7 +205,7 @@ async function classifyWithOpenAI(
     temperature: 0.2,
   };
 
-  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+  const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
     headers: {
       Authorization: `Bearer ${options.apiKey}`,
@@ -264,7 +216,7 @@ async function classifyWithOpenAI(
 
   if (!response.ok) {
     const errText = await response.text();
-    throw new Error(`OpenAI classification failed: ${errText}`);
+    throw new Error(`OpenRouter classification failed: ${errText}`);
   }
 
   const body: unknown = await response.json();
@@ -507,7 +459,7 @@ export const classifyCard = action({
     }
     const userId = user._id;
 
-    const apiKey = process.env.OPENAI_API_KEY;
+    const apiKey = process.env.OPENROUTER_API_KEY;
     const card = await ctx.runQuery(internal.mindCards.getCardForClassify, {
       id: args.id,
       userId,
@@ -525,7 +477,7 @@ export const classifyCard = action({
         autoTags: [],
         autoCategoryState: "failed",
         autoCategoryReason:
-          "OPENAI_API_KEY is not configured in your Convex deployment environment.",
+          "OPENROUTER_API_KEY is not configured in your Convex deployment environment.",
         autoCategoryModel: undefined,
         autoCategory: "uncategorized",
         autoSummary: "Auto-categorization is unavailable.",
@@ -543,7 +495,7 @@ export const classifyCard = action({
       throw new Error("Could not build classification payload from card.");
     }
 
-    const classifier = await classifyWithOpenAI(cardPayload, {
+    const classifier = await classifyWithOpenRouter(cardPayload, {
       apiKey,
       model: args.forceModel,
     });
@@ -561,7 +513,7 @@ export const classifyCard = action({
       autoSummary: classifier.summary,
       aiConfidence: classifier.confidence,
       autoCategoryState: "ready",
-      autoCategoryModel: args.forceModel ?? "gpt-4o",
+      autoCategoryModel: args.forceModel ?? "openrouter/auto",
       autoCategoryReason: undefined,
     });
 
