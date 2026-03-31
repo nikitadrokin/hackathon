@@ -1,28 +1,70 @@
+type NativeAsyncLocalStorageConstructor = new <T>() => {
+	run<R>(store: T, callback: (...args: any[]) => R, ...args: any[]): R
+	enterWith(store: T): void
+	disable(): void
+	getStore(): T | undefined
+}
+
+const isNodeRuntime =
+	typeof globalThis.process !== 'undefined' &&
+	Boolean(globalThis.process?.versions?.node)
+
+const nativeAsyncHooks = isNodeRuntime
+	? await import(/* @vite-ignore */ ['node', 'async_hooks'].join(':'))
+	: null
+
+const NativeAsyncLocalStorage =
+	nativeAsyncHooks?.AsyncLocalStorage as
+		| NativeAsyncLocalStorageConstructor
+		| undefined
+
 export class AsyncLocalStorage<T> {
-  private store: T | undefined
+	private nativeStore = NativeAsyncLocalStorage
+		? new NativeAsyncLocalStorage<T>()
+		: null
 
-  run<R>(store: T, callback: (...args: any[]) => R, ...args: any[]): R {
-    const previousStore = this.store
-    this.store = store
+	private store: T | undefined
 
-    try {
-      return callback(...args)
-    } finally {
-      this.store = previousStore
-    }
-  }
+	run<R>(store: T, callback: (...args: any[]) => R, ...args: any[]): R {
+		if (this.nativeStore) {
+			return this.nativeStore.run(store, callback, ...args)
+		}
 
-  enterWith(store: T): void {
-    this.store = store
-  }
+		const previousStore = this.store
+		this.store = store
 
-  disable(): void {
-    this.store = undefined
-  }
+		try {
+			return callback(...args)
+		} finally {
+			this.store = previousStore
+		}
+	}
 
-  getStore(): T | undefined {
-    return this.store
-  }
+	enterWith(store: T): void {
+		if (this.nativeStore) {
+			this.nativeStore.enterWith(store)
+			return
+		}
+
+		this.store = store
+	}
+
+	disable(): void {
+		if (this.nativeStore) {
+			this.nativeStore.disable()
+			return
+		}
+
+		this.store = undefined
+	}
+
+	getStore(): T | undefined {
+		if (this.nativeStore) {
+			return this.nativeStore.getStore()
+		}
+
+		return this.store
+	}
 }
 
 export default { AsyncLocalStorage }

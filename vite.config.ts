@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite'
+import { defineConfig, type ConfigEnv, type Plugin } from 'vite'
 import { devtools } from '@tanstack/devtools-vite'
 import { resolve as resolvePath } from 'node:path'
 import tsconfigPaths from 'vite-tsconfig-paths'
@@ -8,11 +8,11 @@ import { tanstackStart } from '@tanstack/react-start/plugin/vite'
 import viteReact from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
-const clientNodeShimsPlugin = {
+const clientNodeShimsPlugin: Plugin = {
 	name: 'tanstack-client-node-shims',
 	enforce: 'pre',
 	apply: 'build',
-	config(_config, env) {
+	config(_config: unknown, env: ConfigEnv) {
 		if (env.isSsrBuild) {
 			return
 		}
@@ -50,21 +50,21 @@ const clientNodeShimsPlugin = {
 }
 
 const config = defineConfig({
-  optimizeDeps: {
-    exclude: ['@xenova/transformers'],
-  },
-  plugins: [
+	optimizeDeps: {
+		exclude: ['@xenova/transformers'],
+	},
+	plugins: [
 		clientNodeShimsPlugin,
-    devtools(),
-    tsconfigPaths({ projects: ['./tsconfig.json'] }),
-    tailwindcss(),
-    tanstackStart(),
-    viteReact({
-      babel: {
-        plugins: ['babel-plugin-react-compiler'],
-      },
-    }),
-  ],
+		devtools(),
+		tsconfigPaths({ projects: ['./tsconfig.json'] }),
+		tailwindcss(),
+		tanstackStart(),
+		viteReact({
+			babel: {
+				plugins: ['babel-plugin-react-compiler'],
+			},
+		}),
+	],
 })
 
 export default config
