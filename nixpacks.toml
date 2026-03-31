@@ -1,2 +1,2 @@
 [start]
-cmd = "bun .output/server/index.mjs"
+cmd = "bun dist/server/server.js"
