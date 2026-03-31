@@ -1,22 +1,23 @@
-import type { AutomaticSpeechRecognitionPipelineType } from '@xenova/transformers';
+import type { AutomaticSpeechRecognitionPipelineType } from "@xenova/transformers";
 
 const WHISPER_SAMPLE_RATE = 16_000;
 
 /** Lazily loaded in-browser Whisper pipeline (downloads model on first use). */
-let transcriberPromise: Promise<AutomaticSpeechRecognitionPipelineType> | null = null;
+let transcriberPromise: Promise<AutomaticSpeechRecognitionPipelineType> | null =
+	null;
 
 async function getTranscriber(): Promise<AutomaticSpeechRecognitionPipelineType> {
 	if (!transcriberPromise) {
 		transcriberPromise = (async () => {
-			const { pipeline, env } = await import('@xenova/transformers');
+			const { pipeline, env } = await import("@xenova/transformers");
 			env.allowLocalModels = false;
 			env.useBrowserCache = true;
-			if (typeof SharedArrayBuffer === 'undefined' && env.backends.onnx?.wasm) {
+			if (typeof SharedArrayBuffer === "undefined" && env.backends.onnx?.wasm) {
 				env.backends.onnx.wasm.numThreads = 1;
 			}
 			return pipeline(
-				'automatic-speech-recognition',
-				'Xenova/whisper-tiny.en',
+				"automatic-speech-recognition",
+				"Xenova/whisper-tiny.en",
 			) as Promise<AutomaticSpeechRecognitionPipelineType>;
 		})();
 	}
@@ -52,11 +53,15 @@ export function resampleTo16kHzMono(
 /**
  * Decode a recorded blob (e.g. WebM from MediaRecorder) to mono 16 kHz float samples for Whisper.
  */
-export async function decodeRecordingToWhisperPcm(blob: Blob): Promise<Float32Array> {
+export async function decodeRecordingToWhisperPcm(
+	blob: Blob,
+): Promise<Float32Array> {
 	const arrayBuffer = await blob.arrayBuffer();
 	const audioContext = new AudioContext();
 	try {
-		const audioBuffer = await audioContext.decodeAudioData(arrayBuffer.slice(0));
+		const audioBuffer = await audioContext.decodeAudioData(
+			arrayBuffer.slice(0),
+		);
 		const { numberOfChannels, length, sampleRate } = audioBuffer;
 		const mono = new Float32Array(length);
 		for (let ch = 0; ch < numberOfChannels; ch += 1) {
@@ -75,7 +80,9 @@ export async function decodeRecordingToWhisperPcm(blob: Blob): Promise<Float32Ar
  * Transcribe mono 16 kHz PCM using the in-browser Whisper pipeline.
  * @param pcm Mono float samples at 16 kHz
  */
-export async function transcribePcm16kHzMono(pcm: Float32Array): Promise<string> {
+export async function transcribePcm16kHzMono(
+	pcm: Float32Array,
+): Promise<string> {
 	const transcriber = await getTranscriber();
 	const raw = await transcriber(pcm, {
 		chunk_length_s: 30,
@@ -83,7 +90,7 @@ export async function transcribePcm16kHzMono(pcm: Float32Array): Promise<string>
 	});
 	const items = Array.isArray(raw) ? raw : [raw];
 	const parts = items.map((item) => item.text.trim()).filter(Boolean);
-	return parts.join(' ').trim();
+	return parts.join(" ").trim();
 }
 
 /**

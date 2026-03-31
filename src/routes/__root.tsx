@@ -1,25 +1,12 @@
-import { TanStackDevtools } from "@tanstack/react-devtools";
-import type { QueryClient } from "@tanstack/react-query";
 import {
 	createRootRouteWithContext,
 	HeadContent,
 	Scripts,
-	useRouterState,
 } from "@tanstack/react-router";
-import { TanStackRouterDevtoolsPanel } from "@tanstack/react-router-devtools";
-import type { TRPCOptionsProxy } from "@trpc/tanstack-react-query";
 import { ConvexClientProvider } from "#/components/convex-client-provider";
-import type { TRPCRouter } from "#/integrations/trpc/router";
-import Footer from "../components/Footer";
-import Header from "../components/Header";
-import TanStackQueryDevtools from "../integrations/tanstack-query/devtools";
-import TanStackQueryProvider from "../integrations/tanstack-query/root-provider";
 import appCss from "../styles.css?url";
 
 interface MyRouterContext {
-	queryClient: QueryClient;
-
-	trpc: TRPCOptionsProxy<TRPCRouter>;
 	token?: string | null;
 	isAuthenticated?: boolean;
 }
@@ -44,16 +31,15 @@ export const Route = createRootRouteWithContext<MyRouterContext>()({
 	},
 	head: () => ({
 		meta: [
+			{ charSet: "utf-8" },
+			{ name: "viewport", content: "width=device-width, initial-scale=1" },
+			{ title: "mymind" },
 			{
-				charSet: "utf-8",
+				name: "description",
+				content:
+					"Capture text, images, and voice notes in one private memory studio.",
 			},
-			{
-				name: "viewport",
-				content: "width=device-width, initial-scale=1",
-			},
-			{
-				title: "mymind",
-			},
+			{ name: "theme-color", content: "#f5efe3" },
 		],
 		links: [
 			{
@@ -65,18 +51,6 @@ export const Route = createRootRouteWithContext<MyRouterContext>()({
 	shellComponent: RootDocument,
 });
 
-function AppChrome({ children }: { children: React.ReactNode }) {
-	const pathname = useRouterState({ select: (s) => s.location.pathname });
-	const hideSiteChrome = pathname === "/";
-	return (
-		<>
-			{hideSiteChrome ? null : <Header />}
-			{children}
-			{hideSiteChrome ? null : <Footer />}
-		</>
-	);
-}
-
 function RootDocument({ children }: { children: React.ReactNode }) {
 	const { token } = Route.useRouteContext();
 
@@ -87,24 +61,13 @@ function RootDocument({ children }: { children: React.ReactNode }) {
 				<script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
 				<HeadContent />
 			</head>
-			<body className="font-sans antialiased [overflow-wrap:anywhere] selection:bg-[rgba(79,184,178,0.24)]">
-				<TanStackQueryProvider>
-					<ConvexClientProvider initialToken={token}>
-						<AppChrome>{children}</AppChrome>
-					</ConvexClientProvider>
-					<TanStackDevtools
-						config={{
-							position: "bottom-right",
-						}}
-						plugins={[
-							{
-								name: "Tanstack Router",
-								render: <TanStackRouterDevtoolsPanel />,
-							},
-							TanStackQueryDevtools,
-						]}
-					/>
-				</TanStackQueryProvider>
+			<body className="font-sans antialiased [overflow-wrap:anywhere]">
+				<a className="skip-link" href="#main-content">
+					Skip to Content
+				</a>
+				<ConvexClientProvider initialToken={token}>
+					{children}
+				</ConvexClientProvider>
 				<Scripts />
 			</body>
 		</html>

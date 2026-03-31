@@ -1,12 +1,19 @@
 import {
+	ImagePlus,
+	Mic,
+	NotebookPen,
+	RotateCcw,
+	Square,
+	Upload,
+	WandSparkles,
+} from "lucide-react";
+import {
 	type KeyboardEvent,
 	useCallback,
 	useEffect,
 	useRef,
 	useState,
 } from "react";
-import { resampleTo16kHzMono } from "#/lib/transcribeVoiceBlob";
-import { ADD_CARD_CLASS, CARD_CLASS, TYPE_BUTTON_CLASS } from "./class-names";
 import { formatTime } from "./format-time";
 import type { AddMode, NewCardPayload } from "./types";
 
@@ -20,7 +27,10 @@ const RECORDER_MIME_CANDIDATES = [
 
 function pickRecorderMimeType(): string | undefined {
 	for (const t of RECORDER_MIME_CANDIDATES) {
-		if (typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported(t)) {
+		if (
+			typeof MediaRecorder !== "undefined" &&
+			MediaRecorder.isTypeSupported(t)
+		) {
 			return t;
 		}
 	}
@@ -59,6 +69,7 @@ export function AddCard({
 	const [audioDuration, setAudioDuration] = useState(0);
 	const [voiceTranscript, setVoiceTranscript] = useState("");
 	const [transcribeError, setTranscribeError] = useState<string | null>(null);
+	const [recorderError, setRecorderError] = useState<string | null>(null);
 
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
 	const fileInputRef = useRef<HTMLInputElement>(null);
@@ -76,6 +87,7 @@ export function AddCard({
 			const gen = transcribeGenRef.current;
 			setRecState("transcribing");
 			setTranscribeError(null);
+			setRecorderError(null);
 			try {
 				const { transcribePcm16kHzMono, transcribeVoiceBlob } = await import(
 					"#/lib/transcribeVoiceBlob"
@@ -103,6 +115,7 @@ export function AddCard({
 	const startRecording = useCallback(async () => {
 		let stream: MediaStream | null = null;
 		try {
+			setRecorderError(null);
 			stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 			const mediaStream = stream;
 			const chosenMime = pickRecorderMimeType();
@@ -131,43 +144,53 @@ export function AddCard({
 				if (e.data.size > 0) chunks.current.push(e.data);
 			};
 			mr.onstop = () => {
-				for (const t of mediaStream.getTracks()) t.stop();
+				void (async () => {
+					for (const t of mediaStream.getTracks()) t.stop();
 
-				const recordedType = mr.mimeType || chosenMime || "";
-				const blob = new Blob(chunks.current, {
-					type: recordedType || undefined,
-				});
+					const recordedType = mr.mimeType || chosenMime || "";
+					const blob = new Blob(chunks.current, {
+						type: recordedType || undefined,
+					});
 
-				const sampleRate = pcmTapRef.current?.audioContext.sampleRate ?? 48_000;
-				const pcmParts = pcmChunksRef.current;
-				pcmChunksRef.current = [];
+					const sampleRate =
+						pcmTapRef.current?.audioContext.sampleRate ?? 48_000;
+					const pcmParts = pcmChunksRef.current;
+					pcmChunksRef.current = [];
 
-				disconnectPcmTap(pcmTapRef.current);
-				pcmTapRef.current = null;
+					disconnectPcmTap(pcmTapRef.current);
+					pcmTapRef.current = null;
 
-				let pcm16kMono: Float32Array | undefined;
-				const totalSamples = pcmParts.reduce((s, c) => s + c.length, 0);
-				if (totalSamples > 0) {
-					const merged = new Float32Array(totalSamples);
-					let offset = 0;
-					for (const c of pcmParts) {
-						merged.set(c, offset);
-						offset += c.length;
+					let pcm16kMono: Float32Array | undefined;
+					const totalSamples = pcmParts.reduce(
+						(sum, chunk) => sum + chunk.length,
+						0,
+					);
+					if (totalSamples > 0) {
+						const merged = new Float32Array(totalSamples);
+						let offset = 0;
+						for (const chunk of pcmParts) {
+							merged.set(chunk, offset);
+							offset += chunk.length;
+						}
+
+						const { resampleTo16kHzMono } = await import(
+							"#/lib/transcribeVoiceBlob"
+						);
+						pcm16kMono = resampleTo16kHzMono(merged, sampleRate);
 					}
-					pcm16kMono = resampleTo16kHzMono(merged, sampleRate);
-				}
 
-				voiceBlobRef.current = blob;
-				setAudioUrl((prev) => {
-					if (prev) URL.revokeObjectURL(prev);
-					return URL.createObjectURL(blob);
-				});
-				const reader = new FileReader();
-				reader.onload = (ev) => {
-					if (ev.target?.result) setAudioData(ev.target.result as string);
-				};
-				reader.readAsDataURL(blob);
-				void runTranscription(blob, pcm16kMono);
+					voiceBlobRef.current = blob;
+					setAudioUrl((prev) => {
+						if (prev) URL.revokeObjectURL(prev);
+						return URL.createObjectURL(blob);
+					});
+					const reader = new FileReader();
+					reader.onload = (ev) => {
+						if (ev.target?.result) setAudioData(ev.target.result as string);
+					};
+					reader.readAsDataURL(blob);
+					void runTranscription(blob, pcm16kMono);
+				})();
 			};
 
 			mr.start();
@@ -181,8 +204,10 @@ export function AddCard({
 			if (stream) {
 				for (const t of stream.getTracks()) t.stop();
 			}
-			alert("Microphone access denied.");
-			setMode(null);
+			setRecorderError(
+				"Microphone access is blocked. Allow it in the browser and try again.",
+			);
+			setRecState("idle");
 		}
 	}, [runTranscription]);
 
@@ -193,10 +218,38 @@ export function AddCard({
 	}, [mode]);
 
 	useEffect(() => {
-		if (mode === "voice" && recState === "idle") {
-			startRecording();
+		return () => {
+			if (timer.current) {
+				clearInterval(timer.current);
+				timer.current = null;
+			}
+			disconnectPcmTap(pcmTapRef.current);
+			pcmTapRef.current = null;
+			if (audioUrl) {
+				URL.revokeObjectURL(audioUrl);
+			}
+		};
+	}, [audioUrl]);
+
+	function resetVoiceDraft() {
+		transcribeGenRef.current += 1;
+		if (timer.current) {
+			clearInterval(timer.current);
+			timer.current = null;
 		}
-	}, [mode, recState, startRecording]);
+		setRecSeconds(0);
+		setAudioDuration(0);
+		setRecState("idle");
+		setAudioUrl((prev) => {
+			if (prev) URL.revokeObjectURL(prev);
+			return null;
+		});
+		setAudioData(null);
+		setVoiceTranscript("");
+		setTranscribeError(null);
+		setRecorderError(null);
+		voiceBlobRef.current = null;
+	}
 
 	function switchMode(m: AddMode) {
 		transcribeGenRef.current += 1;
@@ -214,7 +267,10 @@ export function AddCard({
 		setAudioData(null);
 		setVoiceTranscript("");
 		setTranscribeError(null);
+		setRecorderError(null);
 		voiceBlobRef.current = null;
+		setAudioDuration(0);
+		setRecSeconds(0);
 	}
 
 	async function submitText() {
@@ -236,6 +292,9 @@ export function AddCard({
 		reader.onload = async (ev) => {
 			if (ev.target?.result) {
 				await onAdd({ type: "image", imageData: ev.target.result as string });
+				if (fileInputRef.current) {
+					fileInputRef.current.value = "";
+				}
 				setMode(null);
 			}
 		};
@@ -243,7 +302,10 @@ export function AddCard({
 	}
 
 	function stopRecording() {
-		if (timer.current) clearInterval(timer.current);
+		if (timer.current) {
+			clearInterval(timer.current);
+			timer.current = null;
+		}
 		setAudioDuration(recSeconds);
 		mediaRecorder.current?.stop();
 	}
@@ -257,17 +319,8 @@ export function AddCard({
 			audioDuration,
 			...(trimmed ? { text: trimmed } : {}),
 		});
-		transcribeGenRef.current += 1;
-		setAudioUrl((prev) => {
-			if (prev) URL.revokeObjectURL(prev);
-			return null;
-		});
-		setAudioData(null);
-		setVoiceTranscript("");
-		setTranscribeError(null);
-		voiceBlobRef.current = null;
+		resetVoiceDraft();
 		setMode(null);
-		setRecState("idle");
 	}
 
 	function retryTranscription() {
@@ -277,257 +330,264 @@ export function AddCard({
 	}
 
 	return (
-		<div
-			className={`${CARD_CLASS} ${ADD_CARD_CLASS} ${
-				mode ? "border-[#d0d0d0] bg-white" : ""
-			}`}
-		>
-			{!mode && (
-				<>
-					<p className="mb-2.5 text-[10px] font-black uppercase tracking-[0.1em] text-[#bbb]">
-						ADD A NEW NOTE
-					</p>
+		<section className="app-panel overflow-hidden">
+			<div className="border-b border-[var(--edge)] px-5 py-5 sm:px-6">
+				<p className="section-kicker">Capture</p>
+				<div className="mt-4 flex flex-wrap gap-2">
 					<button
 						type="button"
-						className="mb-2.5 block w-full cursor-text border-none bg-transparent p-0 text-[14px] leading-[1.6] text-[#ccc] hover:text-[#aaa]"
+						className={`app-chip ${mode === "text" ? "is-active" : ""}`}
 						onClick={() => switchMode("text")}
 					>
-						Start typing here...
+						<NotebookPen aria-hidden="true" className="size-4" />
+						<span className="font-semibold">Note</span>
 					</button>
-				</>
-			)}
-
-			{mode === "text" && (
-				<div className="flex flex-col">
-					<textarea
-						ref={textareaRef}
-						value={text}
-						onChange={(e) => setText(e.target.value)}
-						onKeyDown={handleTextKey}
-						placeholder="What's on your mind..."
-						className="font-[var(--font-body)] mb-2.5 w-full resize-none border-none bg-transparent p-0 text-[14px] leading-[1.7] text-[#1a1a1a] outline-none"
-						rows={5}
-					/>
-					<div className="flex items-center justify-between">
-						<span className="text-[11px] text-[#bbb]">
-							⌘↵ save · esc cancel
-						</span>
-						<button
-							type="button"
-							onClick={() => void submitText()}
-							disabled={!text.trim()}
-							className="cursor-pointer rounded-lg border-none bg-[#1a1a1a] px-4 py-1.5 text-[12px] font-semibold text-[#fff] transition-opacity duration-150 hover:enabled:opacity-75 disabled:cursor-default disabled:opacity-25"
-						>
-							Save
-						</button>
-					</div>
-				</div>
-			)}
-
-			{mode === "image" && (
-				<label
-					className={`mb-2.5 flex cursor-pointer flex-col items-center justify-center gap-[10px] rounded-[10px] border-[1.5px] border-dashed border-[#ddd] p-[32px_20px] text-[13px] text-[#bbb] transition-all duration-150 hover:border-[#aaa] hover:bg-[#f5f5f5] hover:text-[#888] ${
-						dragging ? "border-[#aaa] bg-[#f5f5f5] text-[#888]" : ""
-					}`}
-					onDragOver={(e) => {
-						e.preventDefault();
-						setDragging(true);
-					}}
-					onDragLeave={() => setDragging(false)}
-					onDrop={(e) => {
-						e.preventDefault();
-						setDragging(false);
-						const f = e.dataTransfer.files[0];
-						if (f) void handleFile(f);
-					}}
-				>
-					<input
-						ref={fileInputRef}
-						type="file"
-						accept="image/*"
-						className="hidden"
-						onChange={(e) => {
-							const f = e.target.files?.[0];
-							if (f) void handleFile(f);
-						}}
-					/>
-					<svg
-						aria-hidden="true"
-						viewBox="0 0 24 24"
-						fill="none"
-						stroke="currentColor"
-						strokeWidth="1.4"
-						width="28"
-						height="28"
+					<button
+						type="button"
+						className={`app-chip ${mode === "image" ? "is-active" : ""}`}
+						onClick={() => switchMode("image")}
 					>
-						<rect x="3" y="3" width="18" height="18" rx="2" />
-						<circle cx="8.5" cy="8.5" r="1.5" />
-						<path
-							d="M21 15l-5-5L5 21"
-							strokeLinecap="round"
-							strokeLinejoin="round"
-						/>
-					</svg>
-					<span>{dragging ? "Drop it" : "Click or drop image"}</span>
-				</label>
-			)}
+						<ImagePlus aria-hidden="true" className="size-4" />
+						<span className="font-semibold">Image</span>
+					</button>
+					<button
+						type="button"
+						className={`app-chip ${mode === "voice" ? "is-active" : ""}`}
+						onClick={() => switchMode("voice")}
+					>
+						<Mic aria-hidden="true" className="size-4" />
+						<span className="font-semibold">Voice</span>
+					</button>
+				</div>
+			</div>
 
-			{mode === "voice" && (
-				<div className="mb-[10px] flex flex-col gap-[10px]">
-					{recState === "recording" && (
-						<>
-							<div className="flex items-center gap-2 text-[13px] text-[#555]">
-								<span className="h-[7px] w-[7px] animate-pulse rounded-full bg-[#ef4444]" />
-								<span className="text-[13px] text-[#888] [font-variant-numeric:tabular-nums]">
-									{formatTime(recSeconds)}
-								</span>
-							</div>
+			<div className="space-y-4 px-5 py-5 sm:px-6 sm:py-6">
+				{!mode ? (
+					<div className="rounded-[24px] border border-dashed border-[var(--edge)] bg-[var(--surface)] px-5 py-6">
+						<p className="display-title text-3xl text-[var(--ink)]">
+							Start with whatever you have.
+						</p>
+						<p className="mt-3 max-w-md text-sm leading-7 text-[var(--ink-soft)]">
+							Drop in a quick note, a screenshot, or a voice fragment. The app
+							will structure it after it lands.
+						</p>
+					</div>
+				) : null}
+
+				{mode === "text" ? (
+					<div className="space-y-4">
+						<label className="grid gap-2" htmlFor="capture-text">
+							<span className="text-sm font-semibold text-[var(--ink)]">
+								Quick Note
+							</span>
+							<textarea
+								ref={textareaRef}
+								id="capture-text"
+								name="capture_text"
+								className="app-textarea"
+								onChange={(event) => setText(event.target.value)}
+								onKeyDown={handleTextKey}
+								placeholder="Write a thought, reminder, or fragment…"
+								rows={6}
+								value={text}
+							/>
+						</label>
+						<div className="flex flex-wrap items-center justify-between gap-3">
+							<p className="text-sm text-[var(--ink-soft)]">
+								Use <span className="font-semibold">⌘/Ctrl + Enter</span> to
+								save quickly.
+							</p>
 							<button
 								type="button"
-								onClick={stopRecording}
-								className="mt-3 self-start cursor-pointer rounded-lg border-none bg-[#1a1a1a] px-4 py-1.5 text-[12px] font-semibold text-[#fff] transition-opacity duration-150"
+								className="app-button"
+								disabled={!text.trim()}
+								onClick={() => void submitText()}
 							>
-								Stop
+								Save Note
 							</button>
-						</>
-					)}
-					{recState === "transcribing" && (
-						<p className="m-0 text-[13px] leading-[1.5] text-[#888]">
-							Transcribing locally… First run downloads a small speech model to
-							your browser.
+						</div>
+					</div>
+				) : null}
+
+				{mode === "image" ? (
+					<label
+						className={`block rounded-[24px] border border-dashed px-5 py-8 text-center transition-[background-color,border-color,color] duration-150 ${
+							dragging
+								? "border-[var(--accent)] bg-[var(--accent-muted)] text-[var(--ink)]"
+								: "border-[var(--edge)] bg-[var(--surface)] text-[var(--ink-soft)]"
+						}`}
+						onDragLeave={() => setDragging(false)}
+						onDragOver={(event) => {
+							event.preventDefault();
+							setDragging(true);
+						}}
+						onDrop={(event) => {
+							event.preventDefault();
+							setDragging(false);
+							const file = event.dataTransfer.files[0];
+							if (file) {
+								void handleFile(file);
+							}
+						}}
+					>
+						<input
+							ref={fileInputRef}
+							accept="image/*"
+							className="sr-only"
+							onChange={(event) => {
+								const file = event.target.files?.[0];
+								if (file) {
+									void handleFile(file);
+								}
+							}}
+							type="file"
+						/>
+						<div className="mx-auto mb-4 flex size-14 items-center justify-center rounded-full bg-[var(--accent-muted)] text-[var(--accent-strong)]">
+							<Upload aria-hidden="true" className="size-6" />
+						</div>
+						<p className="text-lg font-semibold text-[var(--ink)]">
+							{dragging ? "Drop the image here." : "Upload a visual reference."}
 						</p>
-					)}
-					{recState === "done" && audioUrl && (
-						<>
-							<audio src={audioUrl} controls className="w-full">
-								<track kind="captions" />
-							</audio>
-							<label
-								htmlFor="voice-transcript-draft"
-								className="text-[10px] font-black uppercase tracking-[0.08em] text-[#bbb]"
-							>
-								Transcript
-							</label>
-							<textarea
-								id="voice-transcript-draft"
-								value={voiceTranscript}
-								onChange={(e) => setVoiceTranscript(e.target.value)}
-								placeholder="Transcript appears here; you can edit or paste from another tool."
-								rows={4}
-								className="font-[var(--font-body)] w-full resize-y rounded-[10px] border border-[#ebebeb] bg-[#fafafa] p-2.5 text-[13px] leading-[1.6] text-[#1a1a1a] outline-none focus:border-[#ccc]"
-							/>
-							{transcribeError ? (
-								<p className="m-0 text-[12px] leading-[1.4] text-[#b45309]">
-									{transcribeError}
-								</p>
-							) : null}
-							<div className="mt-2.5 flex flex-wrap items-center justify-between gap-2">
-								<div className="flex flex-wrap gap-2">
+						<p className="mt-2 text-sm leading-7 text-[var(--ink-soft)]">
+							Click to choose a file or drag one in from the desktop.
+						</p>
+					</label>
+				) : null}
+
+				{mode === "voice" ? (
+					<div className="space-y-4">
+						<div className="rounded-[24px] border border-[var(--edge)] bg-[var(--surface)] px-5 py-5">
+							<p className="text-lg font-semibold text-[var(--ink)]">
+								Voice Capture
+							</p>
+							<p className="mt-2 text-sm leading-7 text-[var(--ink-soft)]">
+								Record first, then decide how much of the transcript to keep.
+							</p>
+
+							{recState === "idle" && !audioUrl ? (
+								<div className="mt-4 flex flex-wrap items-center gap-3">
 									<button
 										type="button"
-										onClick={() => {
-											transcribeGenRef.current += 1;
-											setAudioUrl((prev) => {
-												if (prev) URL.revokeObjectURL(prev);
-												return null;
-											});
-											setAudioData(null);
-											setVoiceTranscript("");
-											setTranscribeError(null);
-											voiceBlobRef.current = null;
-											setRecState("idle");
-										}}
-										className="cursor-pointer border-none bg-transparent p-0 text-[12px] text-[#aaa] hover:text-[#555]"
+										className="app-button"
+										onClick={() => void startRecording()}
 									>
-										Re-record
+										<Mic aria-hidden="true" className="size-4" />
+										Start Recording
 									</button>
+									<p className="text-sm text-[var(--ink-soft)]">
+										Local transcription runs after the recording stops.
+									</p>
+								</div>
+							) : null}
+
+							{recState === "recording" ? (
+								<div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+									<div className="flex items-center gap-3">
+										<span className="relative flex size-3">
+											<span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[var(--danger)] opacity-75" />
+											<span className="relative inline-flex size-3 rounded-full bg-[var(--danger)]" />
+										</span>
+										<p className="text-sm font-semibold text-[var(--ink)]">
+											Recording
+										</p>
+										<p className="text-sm text-[var(--ink-soft)] [font-variant-numeric:tabular-nums]">
+											{formatTime(recSeconds)}
+										</p>
+									</div>
 									<button
 										type="button"
-										onClick={retryTranscription}
-										className="cursor-pointer border-none bg-transparent p-0 text-[12px] text-[#888] hover:text-[#333]"
+										className="app-button-secondary"
+										onClick={stopRecording}
 									>
-										Transcribe again
+										<Square aria-hidden="true" className="size-4" />
+										Stop
 									</button>
 								</div>
-								<button
-									type="button"
-									onClick={() => void saveVoice()}
-									className="cursor-pointer rounded-lg border-none bg-[#1a1a1a] px-4 py-1.5 text-[12px] font-semibold text-[#fff] transition-opacity duration-150 hover:enabled:opacity-75"
-								>
-									Save
-								</button>
-							</div>
-						</>
-					)}
-				</div>
-			)}
+							) : null}
 
-			<div className="mt-1 flex items-center gap-1 border-t border-[#f0f0f0] pt-[10px]">
-				<button
-					type="button"
-					className={`${TYPE_BUTTON_CLASS} ${mode === "text" ? "bg-[#f0f0f0] text-[#1a1a1a]" : ""}`}
-					onClick={() => switchMode("text")}
-					aria-label="Write note"
-				>
-					<svg
-						aria-hidden="true"
-						viewBox="0 0 24 24"
-						fill="none"
-						stroke="currentColor"
-						strokeWidth="1.8"
-						width="15"
-						height="15"
-					>
-						<path d="M4 6h16M4 12h16M4 18h8" strokeLinecap="round" />
-					</svg>
-				</button>
-				<button
-					type="button"
-					className={`${TYPE_BUTTON_CLASS} ${mode === "image" ? "bg-[#f0f0f0] text-[#1a1a1a]" : ""}`}
-					onClick={() => switchMode("image")}
-					aria-label="Add image"
-				>
-					<svg
-						aria-hidden="true"
-						viewBox="0 0 24 24"
-						fill="none"
-						stroke="currentColor"
-						strokeWidth="1.8"
-						width="15"
-						height="15"
-					>
-						<rect x="3" y="3" width="18" height="18" rx="2" />
-						<circle cx="8.5" cy="8.5" r="1.5" />
-						<path
-							d="M21 15l-5-5L5 21"
-							strokeLinecap="round"
-							strokeLinejoin="round"
-						/>
-					</svg>
-				</button>
-				<button
-					type="button"
-					className={`${TYPE_BUTTON_CLASS} ${mode === "voice" ? "bg-[#f0f0f0] text-[#1a1a1a]" : ""}`}
-					onClick={() => switchMode("voice")}
-					aria-label="Record voice"
-				>
-					<svg
-						aria-hidden="true"
-						viewBox="0 0 24 24"
-						fill="none"
-						stroke="currentColor"
-						strokeWidth="1.8"
-						width="15"
-						height="15"
-					>
-						<rect x="9" y="2" width="6" height="12" rx="3" />
-						<path
-							d="M5 10a7 7 0 0 0 14 0M12 19v3M8 22h8"
-							strokeLinecap="round"
-						/>
-					</svg>
-				</button>
+							{recState === "transcribing" ? (
+								<p
+									aria-live="polite"
+									className="mt-4 text-sm leading-7 text-[var(--ink-soft)]"
+								>
+									Transcribing locally… The first run may download a small
+									speech model into the browser.
+								</p>
+							) : null}
+
+							{recorderError ? (
+								<p
+									aria-live="polite"
+									className="mt-4 rounded-[18px] border border-[color:rgba(155,50,33,0.18)] bg-[color:rgba(155,50,33,0.08)] px-4 py-3 text-sm text-[var(--danger)]"
+									role="alert"
+								>
+									{recorderError}
+								</p>
+							) : null}
+						</div>
+
+						{recState === "done" && audioUrl ? (
+							<div className="space-y-4">
+								<div className="rounded-[24px] border border-[var(--edge)] bg-[var(--surface)] p-4">
+									<audio className="w-full" controls src={audioUrl}>
+										<track kind="captions" label="Transcript preview" />
+									</audio>
+								</div>
+								<label className="grid gap-2" htmlFor="voice-transcript-draft">
+									<span className="text-sm font-semibold text-[var(--ink)]">
+										Transcript Draft
+									</span>
+									<textarea
+										id="voice-transcript-draft"
+										name="voice_transcript_draft"
+										className="app-textarea"
+										onChange={(event) => setVoiceTranscript(event.target.value)}
+										placeholder="Transcript appears here. Edit it before saving…"
+										rows={5}
+										value={voiceTranscript}
+									/>
+								</label>
+								{transcribeError ? (
+									<p
+										aria-live="polite"
+										className="rounded-[18px] border border-[color:rgba(168,91,8,0.18)] bg-[color:rgba(168,91,8,0.08)] px-4 py-3 text-sm text-[var(--warning)]"
+										role="alert"
+									>
+										{transcribeError}
+									</p>
+								) : null}
+								<div className="flex flex-wrap items-center justify-between gap-3">
+									<div className="flex flex-wrap gap-2">
+										<button
+											type="button"
+											className="app-button-secondary"
+											onClick={resetVoiceDraft}
+										>
+											<RotateCcw aria-hidden="true" className="size-4" />
+											Record Again
+										</button>
+										<button
+											type="button"
+											className="app-button-secondary"
+											onClick={retryTranscription}
+										>
+											<WandSparkles aria-hidden="true" className="size-4" />
+											Transcribe Again
+										</button>
+									</div>
+									<button
+										type="button"
+										className="app-button"
+										onClick={() => void saveVoice()}
+									>
+										Save Recording
+									</button>
+								</div>
+							</div>
+						) : null}
+					</div>
+				) : null}
 			</div>
-		</div>
+		</section>
 	);
 }

@@ -12,7 +12,6 @@ import type * as http from "../http.js";
 import type * as lib_requireUser from "../lib/requireUser.js";
 import type * as mindCards from "../mindCards.js";
 import type * as mindMirror from "../mindMirror.js";
-import type * as myFunctions from "../myFunctions.js";
 
 import type {
   ApiFromModules,
@@ -25,7 +24,6 @@ declare const fullApi: ApiFromModules<{
   "lib/requireUser": typeof lib_requireUser;
   mindCards: typeof mindCards;
   mindMirror: typeof mindMirror;
-  myFunctions: typeof myFunctions;
 }>;
 
 /**
