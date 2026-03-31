@@ -1,2 +1,2 @@
 [start]
-cmd = "bun dist/server/server.js"
+cmd = "bun start"
